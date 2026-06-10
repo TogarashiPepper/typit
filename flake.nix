@@ -25,7 +25,7 @@
       inherit (nixpkgs) lib;
       systems = [
         "aarch64-linux"
-		"aarch64-darwin"
+        "aarch64-darwin"
         "x86_64-linux"
       ];
       forAllSystems =
@@ -41,7 +41,7 @@
             check = self.checks.${system}.pre-commit-check;
 
             buildInputs = [ ];
-            nativeBuildInputs = [ ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
           }
         );
     in
@@ -105,6 +105,11 @@
                 src = ./.;
                 meta.mainProgram = "typit";
                 cargoLock.lockFile = ./Cargo.lock;
+
+                postInstall = ''
+                  wrapProgram $out/bin/typit \
+                    --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.typst ]}
+                '';
               };
         }
       );
@@ -126,6 +131,7 @@
               check.enabledPackages
               ++ (with pkgs; [
                 rustToolchain
+                typst
               ])
               ++ buildInputs
               ++ nativeBuildInputs;
