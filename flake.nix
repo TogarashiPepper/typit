@@ -63,7 +63,6 @@
 
       checks = forAllSystems (
         {
-          pkgs,
           system,
           ...
         }:
@@ -97,7 +96,7 @@
               cargo = pkgs.rustToolchain;
               rustc = pkgs.rustToolchain;
             }).buildRustPackage
-              rec {
+              {
                 inherit buildInputs nativeBuildInputs;
 
                 pname = "typit";
@@ -117,7 +116,6 @@
       devShells = forAllSystems (
         {
           pkgs,
-          system,
           check,
           buildInputs,
           nativeBuildInputs,
