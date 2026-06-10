@@ -2,6 +2,7 @@
 name = "typit"
 version = "0.1.0"
 edition = "2024"
+default-run = "typit"
 
 [dependencies]
 serenity = "0.12"

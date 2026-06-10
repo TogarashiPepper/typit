@@ -1,7 +1,11 @@
 use std::time::Duration;
 use std::{env, process::Stdio};
 
-use serenity::all::{CreateAllowedMentions, CreateAttachment, CreateMessage};
+use serenity::all::{
+    ActionRowComponent, CreateActionRow, CreateAllowedMentions, CreateAttachment, CreateInputText,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal,
+    EditAttachments, EditInteractionResponse, InputTextStyle, Interaction,
+};
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -16,6 +20,48 @@ const PREAMBLE: &str = r#"
 "#;
 
 struct Handler;
+
+async fn run_typst(content: &str) -> (String, Vec<CreateAttachment>) {
+    let mut child = tokio::process::Command::new("typst")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .args(["compile", "-", "-", "--format", "png"])
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(format!("{PREAMBLE}\n{content}").as_bytes())
+        .await
+        .unwrap();
+    drop(stdin);
+
+    let mut buf = vec![];
+
+    let mut stdout = child.stdout.take().unwrap();
+    if tokio::time::timeout(Duration::from_secs(25), stdout.read_to_end(&mut buf))
+        .await
+        .is_err()
+    {
+        return ("Your code took too long (>25s) to run".to_owned(), vec![]);
+    };
+
+    let mut stderr = child.stderr.take().unwrap();
+    stderr.read_to_end(&mut buf).await.unwrap();
+
+    let stat = child.wait().await.unwrap();
+
+    if !stat.success() {
+        let err = String::from_utf8_lossy(&buf).into_owned();
+
+        (format!("```typ\n{err}\n```"), vec![])
+    } else {
+        let attachment = CreateAttachment::bytes(buf, "typst.png");
+
+        (String::new(), vec![attachment])
+    }
+}
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -43,54 +89,92 @@ impl EventHandler for Handler {
             content = lines.collect::<String>();
         }
 
-        let mut child = tokio::process::Command::new("typst")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .args(["compile", "-", "-", "--format", "png"])
-            .spawn()
-            .unwrap();
+        let resp = run_typst(&content).await;
+        let resp = CreateMessage::new()
+            .content(resp.0)
+            .reference_message(&msg)
+            .files(resp.1);
 
-        let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(format!("{PREAMBLE}\n{content}").as_bytes())
-            .await
-            .unwrap();
-        drop(stdin);
+        msg.channel_id.send_message(&ctx, resp).await.unwrap();
+    }
 
-        let mut buf = vec![];
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let mentions = CreateAllowedMentions::new().replied_user(true);
 
-        let mut stdout = child.stdout.take().unwrap();
-        if tokio::time::timeout(Duration::from_secs(25), stdout.read_to_end(&mut buf))
-            .await
-            .is_err()
-        {
-            msg.reply_ping(&ctx, "Your code took too long (>25s) to run")
-                .await
-                .unwrap();
-        };
+        match interaction {
+            Interaction::Command(cmd) => {
+                if cmd.data.name != "typ" {
+                    return;
+                }
 
-        let mut stderr = child.stderr.take().unwrap();
-        stderr.read_to_end(&mut buf).await.unwrap();
+                if cmd.data.options.is_empty() {
+                    let txt_inp =
+                        CreateInputText::new(InputTextStyle::Paragraph, "code", "typst_doc_body")
+                            .placeholder("$ 1 + 2 = 3 $")
+                            .required(true);
+                    let action_row = CreateActionRow::InputText(txt_inp);
+                    let modal = CreateModal::new("typst_modal_id", "Input your code")
+                        .components(vec![action_row]);
 
-        let stat = child.wait().await.unwrap();
+                    let resp = CreateInteractionResponse::Modal(modal);
+                    cmd.create_response(&ctx, resp).await.unwrap();
+                } else {
+                    let code = cmd.data.options[0].value.as_str().unwrap();
+                    cmd.create_response(
+                        &ctx,
+                        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+                    )
+                    .await
+                    .unwrap();
 
-        if !stat.success() {
-            let err = String::from_utf8_lossy(&buf).into_owned();
+                    let msg = run_typst(code).await;
 
-            msg.reply_ping(&ctx, format!("```typ\n{err}\n```"))
-                .await
-                .unwrap();
-        } else {
-            let attachment = CreateAttachment::bytes(buf, "typst.png");
-            let mentions = CreateAllowedMentions::new().replied_user(true);
-            let message = CreateMessage::new()
-                .files([attachment])
-                .reference_message(&msg)
-                .allowed_mentions(mentions);
+                    let mut attachments = EditAttachments::new();
 
-            msg.channel_id.send_message(&ctx, message).await.unwrap();
-        };
+                    for atch in msg.1 {
+                        attachments = attachments.add(atch);
+                    }
+
+                    let msg = EditInteractionResponse::new()
+                        .content(msg.0)
+                        .attachments(attachments)
+                        .allowed_mentions(mentions);
+
+                    cmd.edit_response(&ctx, msg).await.unwrap();
+                }
+            }
+            Interaction::Modal(modal_int) => {
+                let ActionRowComponent::InputText(in_text) =
+                    modal_int.data.components[0].components[0].clone()
+                else {
+                    unreachable!();
+                };
+
+                let code = in_text.value.unwrap();
+                modal_int
+                    .create_response(
+                        &ctx,
+                        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+                    )
+                    .await
+                    .unwrap();
+                let msg = run_typst(&code).await;
+
+                let mut attachments = EditAttachments::new();
+
+                for atch in msg.1 {
+                    attachments = attachments.add(atch);
+                }
+
+                let msg = EditInteractionResponse::new()
+                    .content(msg.0)
+                    .attachments(attachments)
+                    .allowed_mentions(mentions);
+
+                modal_int.edit_response(&ctx, msg).await.unwrap();
+            }
+            _ => todo!(),
+        }
     }
 
     async fn ready(&self, _: Context, ready: Ready) {
