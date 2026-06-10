@@ -20,7 +20,7 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
-        let Some(content) = msg.content.strip_prefix(",typ ") else {
+        let Some(content) = msg.content.strip_prefix(",typ") else {
             return;
         };
 
