@@ -24,13 +24,23 @@ impl EventHandler for Handler {
             return;
         };
 
-        if content.trim().is_empty() {
+        let mut content = content.trim().to_owned();
+
+        if content.is_empty() {
             msg.reply_ping(
                 &ctx,
                 "You must provide code to typeset. Usage: `,typ [code]`",
             )
             .await
             .unwrap();
+        }
+
+        if content.starts_with("```") {
+            let mut lines = content.lines();
+            lines.next().unwrap();
+            lines.next_back().unwrap();
+
+            content = lines.collect::<String>();
         }
 
         let mut child = tokio::process::Command::new("typst")
